@@ -1,13 +1,11 @@
 package nstv.arcoreplayground.augmentedFace
 
-import android.app.Activity
-import android.app.ActivityManager
-import android.content.Context
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
-import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import com.google.ar.core.ArCoreApk
+import androidx.core.content.FileProvider
+import com.google.android.material.snackbar.Snackbar
 import com.google.ar.core.AugmentedFace
 import com.google.ar.core.Pose
 import com.google.ar.core.TrackingState
@@ -18,13 +16,14 @@ import com.google.ar.sceneform.rendering.Renderable
 import com.google.ar.sceneform.ux.AugmentedFaceNode
 import kotlinx.android.synthetic.main.activity_augmented_face.*
 import nstv.arcoreplayground.R
+import nstv.arcoreplayground.common.checkIsSupportedDeviceOrFinish
+import nstv.arcoreplayground.common.takePhoto
+import java.io.File
 import java.util.*
 
 
 class AugmentedFaceActivity : AppCompatActivity() {
 
-    val TAG = "AugmentedFaceActivity"
-    val MIN_OPENGL_VERSION = 3.0
 
     var glassesRenderable: ModelRenderable? = null
     val faceNodeMap = HashMap<AugmentedFace, AugmentedFaceNode>()
@@ -32,7 +31,7 @@ class AugmentedFaceActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_augmented_face)
-        if (!checkIsSupportedDeviceOrFinish(this)) {
+        if (!checkIsSupportedDeviceOrFinish()) {
             return
         }
 
@@ -64,14 +63,12 @@ class AugmentedFaceActivity : AppCompatActivity() {
         val scene = sceneView.scene
 
         scene.addOnUpdateListener {
+
             if (glassesRenderable == null) {
                 return@addOnUpdateListener
             }
 
-            val faceList = sceneView.session?.getAllTrackables(AugmentedFace::class.java) ?: Collections.emptyList()
-
-            // Make new AugmentedFaceNodes for any new faces.
-            for (face in faceList) {
+            sceneView.session?.getAllTrackables(AugmentedFace::class.java)?.forEach { face ->
                 if (!faceNodeMap.containsKey(face)) {
                     val faceNode = AugmentedFaceNode(face)
 
@@ -96,22 +93,42 @@ class AugmentedFaceActivity : AppCompatActivity() {
 
                 }
             }
-        }
 
-        // Remove any AugmentedFaceNodes associated with an AugmentedFace that stopped tracking.
-        val iterator = faceNodeMap.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val face = entry.key
-            if (face.trackingState == TrackingState.STOPPED) {
-                val node = entry.value
-                node.children.forEach {
-                    node.removeChild(it)
+            // Remove any AugmentedFaceNodes associated with an AugmentedFace that stopped tracking.
+            val iterator = faceNodeMap.entries.iterator()
+            while (iterator.hasNext()) {
+                val entry = iterator.next()
+                val face = entry.key
+                if (face.trackingState != TrackingState.TRACKING) {
+                    val node = entry.value
+                    node.setParent(null)
+                    iterator.remove()
                 }
-                node.setParent(null)
-                iterator.remove()
             }
         }
+
+        action_take_photo.setOnClickListener { sceneView.takePhoto { photoSaved(it) } }
+    }
+
+    fun photoSaved(filename: String) {
+        val snackbar = Snackbar.make(
+            content,
+            "Photo saved", Snackbar.LENGTH_LONG
+        )
+        snackbar.setAction("Open in Photos") {
+            val photoFile = File(filename)
+
+            val photoURI = FileProvider.getUriForFile(
+                this,
+                this.packageName + ".nstv.provider",
+                photoFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW, photoURI)
+            intent.setDataAndType(photoURI, "image/*")
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(intent)
+        }
+        snackbar.show()
     }
 
     fun getDistance(a: Pose, b: Pose): Float {
@@ -119,33 +136,5 @@ class AugmentedFaceActivity : AppCompatActivity() {
         val y = Math.pow((a.ty() - b.ty()).toDouble(), 2.0)
         val z = Math.pow((a.tz() - b.tz()).toDouble(), 2.0)
         return Math.sqrt(x + y + z).toFloat()
-    }
-
-    /**
-     * Returns false and displays an error message if Sceneform can not run, true if Sceneform can run
-     * on this device.
-     *
-     * Sceneform requires Android N on the device as well as OpenGL 3.0 capabilities.
-     *
-     * Finishes the activity if Sceneform can not run
-     */
-    private fun checkIsSupportedDeviceOrFinish(activity: Activity): Boolean {
-        if (ArCoreApk.getInstance().checkAvailability(activity) === ArCoreApk.Availability.UNSUPPORTED_DEVICE_NOT_CAPABLE) {
-            Log.e(TAG, "Augmented Faces requires ArCore.")
-            Toast.makeText(activity, "Augmented Faces requires ArCore", Toast.LENGTH_LONG).show()
-            activity.finish()
-            return false
-        }
-        val openGlVersionString = (activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager)
-            .deviceConfigurationInfo
-            .glEsVersion
-        if (java.lang.Double.parseDouble(openGlVersionString) < MIN_OPENGL_VERSION) {
-            Log.e(TAG, "Sceneform requires OpenGL ES 3.0 later")
-            Toast.makeText(activity, "Sceneform requires OpenGL ES 3.0 or later", Toast.LENGTH_LONG)
-                .show()
-            activity.finish()
-            return false
-        }
-        return true
     }
 }
